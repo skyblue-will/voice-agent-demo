@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice Agent</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: #0a0a0a;
+      color: #e0e0e0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2rem;
+      max-width: 480px;
+      width: 100%;
+      padding: 2rem;
+    }
+
+    h1 {
+      font-size: 1.4rem;
+      font-weight: 400;
+      color: #888;
+      letter-spacing: 0.05em;
+    }
+
+    .orb-container {
+      position: relative;
+      width: 200px;
+      height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .orb {
+      width: 140px;
+      height: 140px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 35%, #2a2a3a, #111118);
+      box-shadow: 0 0 40px rgba(100, 100, 200, 0.08);
+      transition: all 0.4s ease;
+      cursor: pointer;
+      position: relative;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .orb.listening {
+      background: radial-gradient(circle at 35% 35%, #1a3a5a, #0a1828);
+      box-shadow: 0 0 60px rgba(60, 130, 220, 0.25);
+      animation: pulse-listen 1.5s ease-in-out infinite;
+    }
+
+    .orb.thinking {
+      background: radial-gradient(circle at 35% 35%, #3a2a4a, #1a1028);
+      box-shadow: 0 0 60px rgba(140, 80, 200, 0.25);
+      animation: pulse-think 0.8s ease-in-out infinite;
+    }
+
+    .orb.speaking {
+      background: radial-gradient(circle at 35% 35%, #1a4a3a, #0a2818);
+      box-shadow: 0 0 80px rgba(60, 200, 140, 0.3);
+      animation: pulse-speak 0.6s ease-in-out infinite;
+    }
+
+    @keyframes pulse-listen {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+
+    @keyframes pulse-think {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.03); }
+    }
+
+    @keyframes pulse-speak {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.06); }
+    }
+
+    .status {
+      font-size: 0.9rem;
+      color: #666;
+      min-height: 1.4em;
+      text-align: center;
+      transition: color 0.3s;
+    }
+
+    .status.active { color: #aaa; }
+
+    .transcript {
+      width: 100%;
+      max-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+      padding: 0 0.5rem;
+    }
+
+    .transcript::-webkit-scrollbar { width: 4px; }
+    .transcript::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    .msg {
+      font-size: 0.85rem;
+      line-height: 1.4;
+      padding: 0.6rem 0.8rem;
+      border-radius: 12px;
+      max-width: 85%;
+      word-wrap: break-word;
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: #1a2a3a;
+      color: #b0c8e0;
+    }
+
+    .msg.agent {
+      align-self: flex-start;
+      background: #1a1a2a;
+      color: #c0c0d8;
+    }
+
+    .credit {
+      position: fixed;
+      bottom: 1rem;
+      font-size: 0.7rem;
+      color: #444;
+    }
+
+    .credit a { color: #555; text-decoration: none; }
+    .credit a:hover { color: #888; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>voice agent</h1>
+
+    <div class="orb-container">
+      <div class="orb" id="orb"></div>
+    </div>
+
+    <div class="status" id="status">tap to speak</div>
+
+    <div class="transcript" id="transcript"></div>
+  </div>
+
+  <div class="credit">
+    built by <a href="https://willpalmer.co.uk">Will Palmer</a> · 
+    voice by <a href="https://elevenlabs.io">ElevenLabs</a>
+  </div>
+
+  <script>
+    const orb = document.getElementById('orb');
+    const statusEl = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+
+    let state = 'idle'; // idle, listening, thinking, speaking
+    let recognition = null;
+    let history = [];
+    let audioCtx = null;
+
+    function setState(s, msg) {
+      state = s;
+      orb.className = 'orb' + (s !== 'idle' ? ' ' + s : '');
+      statusEl.className = 'status' + (s !== 'idle' ? ' active' : '');
+      statusEl.textContent = msg || {
+        idle: 'tap to speak',
+        listening: 'listening...',
+        thinking: 'thinking...',
+        speaking: 'speaking...'
+      }[s];
+    }
+
+    function addMessage(role, text) {
+      const div = document.createElement('div');
+      div.className = 'msg ' + role;
+      div.textContent = text;
+      transcriptEl.appendChild(div);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+      history.push({ role: role === 'user' ? 'user' : 'assistant', content: text });
+      if (history.length > 20) history = history.slice(-20);
+    }
+
+    function initSpeechRecognition() {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SR) {
+        setState('idle', 'speech recognition not supported');
+        return null;
+      }
+      const r = new SR();
+      r.continuous = false;
+      r.interimResults = false;
+      r.lang = 'en-GB';
+
+      r.onresult = (e) => {
+        const text = e.results[0][0].transcript;
+        if (text.trim()) {
+          addMessage('user', text);
+          processMessage(text);
+        } else {
+          setState('idle');
+        }
+      };
+
+      r.onerror = (e) => {
+        console.error('Speech error:', e.error);
+        if (e.error === 'no-speech') {
+          setState('idle', 'no speech detected — tap again');
+        } else {
+          setState('idle', 'error — tap to try again');
+        }
+      };
+
+      r.onend = () => {
+        if (state === 'listening') {
+          setState('idle');
+        }
+      };
+
+      return r;
+    }
+
+    async function processMessage(text) {
+      setState('thinking');
+
+      try {
+        const chatRes = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: text, history: history.slice(0, -1) })
+        });
+
+        const chatData = await chatRes.json();
+        if (!chatRes.ok) throw new Error(chatData.error);
+
+        const reply = chatData.text;
+        addMessage('agent', reply);
+
+        setState('speaking');
+
+        const speakRes = await fetch('/api/speak', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: reply })
+        });
+
+        if (!speakRes.ok) {
+          const err = await speakRes.json();
+          throw new Error(err.error);
+        }
+
+        const audioBlob = await speakRes.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audio = new Audio(audioUrl);
+
+        audio.onended = () => {
+          URL.revokeObjectURL(audioUrl);
+          setState('idle');
+        };
+
+        audio.onerror = () => {
+          URL.revokeObjectURL(audioUrl);
+          setState('idle', 'audio error — tap to try again');
+        };
+
+        await audio.play();
+
+      } catch (err) {
+        console.error('Error:', err);
+        setState('idle', 'error — tap to try again');
+      }
+    }
+
+    orb.addEventListener('click', () => {
+      if (state === 'speaking') return;
+
+      if (state === 'listening') {
+        recognition?.stop();
+        setState('idle');
+        return;
+      }
+
+      if (state !== 'idle') return;
+
+      if (!recognition) {
+        recognition = initSpeechRecognition();
+        if (!recognition) return;
+      }
+
+      // Need user gesture for audio context
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+
+      setState('listening');
+      try {
+        recognition.start();
+      } catch (e) {
+        setState('idle', 'mic error — check permissions');
+      }
+    });
+
+    // Keyboard shortcut — space to talk
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && e.target === document.body) {
+        e.preventDefault();
+        orb.click();
+      }
+    });
+  </script>
+</body>
+</html>
