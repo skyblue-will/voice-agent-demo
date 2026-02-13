@@ -266,7 +266,7 @@
         statusEl.className = 'status' + (s !== 'idle' ? ' active' : '');
         statusEl.textContent = msg || {
           idle: 'tap to speak',
-          listening: 'listening…',
+          listening: 'listening — tap to send',
           thinking: 'thinking…',
           speaking: ''
         }[s];
@@ -295,6 +295,11 @@
         r.continuous = true;
         r.interimResults = true;
         r.lang = 'en-GB';
+
+        r.onaudiostart = () => {
+          // Mic is actually capturing now
+          if (state !== 'listening') setState('listening');
+        };
 
         r.onresult = (e) => {
           clearTimeout(silenceTimer);
@@ -403,8 +408,10 @@
       orb.addEventListener('click', () => {
         if (state === 'speaking') return;
         if (state === 'listening') {
+          // Manual cutoff — send whatever we have
+          clearTimeout(silenceTimer);
           recognition?.stop();
-          setState('idle');
+          // onend handler will pick up finalTranscript and send it
           return;
         }
         if (state !== 'idle') return;
@@ -418,7 +425,7 @@
           audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
 
-        setState('listening');
+        setState('idle', 'starting mic…');
         finalTranscript = '';
         clearTimeout(silenceTimer);
         try {
