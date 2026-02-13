@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="robots" content="noindex, nofollow">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cara — Voice Agent Demo</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,14 +23,28 @@
       overflow: hidden;
     }
 
-    .container {
+    .gate {
       display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: #333;
+      font-size: 0.85rem;
+    }
+
+    .container {
+      display: none;
       flex-direction: column;
       align-items: center;
       gap: 1.5rem;
       max-width: 480px;
       width: 100%;
       padding: 2rem;
+    }
+
+    .container.active {
+      display: flex;
     }
 
     .header {
@@ -189,7 +204,9 @@
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="gate" id="gate"></div>
+
+  <div class="container" id="app">
     <div class="header">
       <h1>cara</h1>
       <p>voice agent</p>
@@ -216,157 +233,176 @@
   </div>
 
   <script>
-    const orb = document.getElementById('orb');
-    const statusEl = document.getElementById('status');
-    const transcriptEl = document.getElementById('transcript');
+    const TOKEN = 'Phuj2UFI4bPgWWst';
 
-    let state = 'idle';
-    let recognition = null;
-    let history = [];
-    let audioCtx = null;
-
-    function setState(s, msg) {
-      state = s;
-      orb.className = 'orb' + (s !== 'idle' ? ' ' + s : '');
-      statusEl.className = 'status' + (s !== 'idle' ? ' active' : '');
-      statusEl.textContent = msg || {
-        idle: 'tap to speak',
-        listening: 'listening…',
-        thinking: 'thinking…',
-        speaking: ''
-      }[s];
+    function checkAccess() {
+      const params = new URLSearchParams(window.location.search);
+      const hash = window.location.hash.slice(1);
+      return params.get('t') === TOKEN || hash === TOKEN;
     }
 
-    function addMessage(role, text) {
-      const div = document.createElement('div');
-      div.className = 'msg ' + role;
-      div.textContent = text;
-      transcriptEl.appendChild(div);
-      transcriptEl.scrollTop = transcriptEl.scrollHeight;
-      history.push({ role: role === 'user' ? 'user' : 'assistant', content: text });
-      if (history.length > 20) history = history.slice(-20);
+    if (!checkAccess()) {
+      document.getElementById('gate').textContent = '';
+      document.body.style.cursor = 'default';
+    } else {
+      document.getElementById('gate').style.display = 'none';
+      document.getElementById('app').classList.add('active');
+      init();
     }
 
-    function initSpeechRecognition() {
-      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SR) {
-        setState('idle', 'speech recognition not supported');
-        return null;
+    function init() {
+      const orb = document.getElementById('orb');
+      const statusEl = document.getElementById('status');
+      const transcriptEl = document.getElementById('transcript');
+
+      let state = 'idle';
+      let recognition = null;
+      let history = [];
+      let audioCtx = null;
+
+      function setState(s, msg) {
+        state = s;
+        orb.className = 'orb' + (s !== 'idle' ? ' ' + s : '');
+        statusEl.className = 'status' + (s !== 'idle' ? ' active' : '');
+        statusEl.textContent = msg || {
+          idle: 'tap to speak',
+          listening: 'listening…',
+          thinking: 'thinking…',
+          speaking: ''
+        }[s];
       }
-      const r = new SR();
-      r.continuous = false;
-      r.interimResults = false;
-      r.lang = 'en-GB';
 
-      r.onresult = (e) => {
-        const text = e.results[0][0].transcript;
-        if (text.trim()) {
-          addMessage('user', text);
-          processMessage(text);
-        } else {
-          setState('idle');
+      function addMessage(role, text) {
+        const div = document.createElement('div');
+        div.className = 'msg ' + role;
+        div.textContent = text;
+        transcriptEl.appendChild(div);
+        transcriptEl.scrollTop = transcriptEl.scrollHeight;
+        history.push({ role: role === 'user' ? 'user' : 'assistant', content: text });
+        if (history.length > 20) history = history.slice(-20);
+      }
+
+      function initSpeechRecognition() {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) {
+          setState('idle', 'speech recognition not supported');
+          return null;
         }
-      };
+        const r = new SR();
+        r.continuous = false;
+        r.interimResults = false;
+        r.lang = 'en-GB';
 
-      r.onerror = (e) => {
-        if (e.error === 'no-speech') {
-          setState('idle', 'no speech detected — tap again');
-        } else if (e.error === 'not-allowed') {
-          setState('idle', 'microphone access needed');
-        } else {
-          setState('idle', 'tap to speak');
-        }
-      };
-
-      r.onend = () => {
-        if (state === 'listening') setState('idle');
-      };
-
-      return r;
-    }
-
-    async function processMessage(text) {
-      setState('thinking');
-
-      try {
-        const chatRes = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: text, history: history.slice(0, -1) })
-        });
-
-        const chatData = await chatRes.json();
-        if (!chatRes.ok) throw new Error(chatData.error);
-
-        const reply = chatData.text;
-        addMessage('agent', reply);
-        setState('speaking');
-
-        const speakRes = await fetch('/api/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: reply })
-        });
-
-        if (!speakRes.ok) {
-          const err = await speakRes.json();
-          throw new Error(err.error);
-        }
-
-        const audioBlob = await speakRes.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
-        const audio = new Audio(audioUrl);
-
-        audio.onended = () => {
-          URL.revokeObjectURL(audioUrl);
-          setState('idle');
+        r.onresult = (e) => {
+          const text = e.results[0][0].transcript;
+          if (text.trim()) {
+            addMessage('user', text);
+            processMessage(text);
+          } else {
+            setState('idle');
+          }
         };
 
-        audio.onerror = () => {
-          URL.revokeObjectURL(audioUrl);
-          setState('idle');
+        r.onerror = (e) => {
+          if (e.error === 'no-speech') {
+            setState('idle', 'no speech detected — tap again');
+          } else if (e.error === 'not-allowed') {
+            setState('idle', 'microphone access needed');
+          } else {
+            setState('idle', 'tap to speak');
+          }
         };
 
-        await audio.play();
+        r.onend = () => {
+          if (state === 'listening') setState('idle');
+        };
 
-      } catch (err) {
-        console.error('Error:', err);
-        setState('idle', 'something went wrong — tap to try again');
+        return r;
       }
+
+      async function processMessage(text) {
+        setState('thinking');
+
+        try {
+          const chatRes = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, history: history.slice(0, -1) })
+          });
+
+          const chatData = await chatRes.json();
+          if (!chatRes.ok) throw new Error(chatData.error);
+
+          const reply = chatData.text;
+          addMessage('agent', reply);
+          setState('speaking');
+
+          const speakRes = await fetch('/api/speak', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: reply })
+          });
+
+          if (!speakRes.ok) {
+            const err = await speakRes.json();
+            throw new Error(err.error);
+          }
+
+          const audioBlob = await speakRes.blob();
+          const audioUrl = URL.createObjectURL(audioBlob);
+          const audio = new Audio(audioUrl);
+
+          audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            setState('idle');
+          };
+
+          audio.onerror = () => {
+            URL.revokeObjectURL(audioUrl);
+            setState('idle');
+          };
+
+          await audio.play();
+
+        } catch (err) {
+          console.error('Error:', err);
+          setState('idle', 'something went wrong — tap to try again');
+        }
+      }
+
+      orb.addEventListener('click', () => {
+        if (state === 'speaking') return;
+        if (state === 'listening') {
+          recognition?.stop();
+          setState('idle');
+          return;
+        }
+        if (state !== 'idle') return;
+
+        if (!recognition) {
+          recognition = initSpeechRecognition();
+          if (!recognition) return;
+        }
+
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        setState('listening');
+        try {
+          recognition.start();
+        } catch (e) {
+          setState('idle', 'microphone error');
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && e.target === document.body) {
+          e.preventDefault();
+          orb.click();
+        }
+      });
     }
-
-    orb.addEventListener('click', () => {
-      if (state === 'speaking') return;
-      if (state === 'listening') {
-        recognition?.stop();
-        setState('idle');
-        return;
-      }
-      if (state !== 'idle') return;
-
-      if (!recognition) {
-        recognition = initSpeechRecognition();
-        if (!recognition) return;
-      }
-
-      if (!audioCtx) {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      }
-
-      setState('listening');
-      try {
-        recognition.start();
-      } catch (e) {
-        setState('idle', 'microphone error');
-      }
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.code === 'Space' && e.target === document.body) {
-        e.preventDefault();
-        orb.click();
-      }
-    });
   </script>
 </body>
 </html>
