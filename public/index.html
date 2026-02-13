@@ -282,6 +282,9 @@
         if (history.length > 20) history = history.slice(-20);
       }
 
+      let silenceTimer = null;
+      let finalTranscript = '';
+
       function initSpeechRecognition() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
@@ -289,21 +292,39 @@
           return null;
         }
         const r = new SR();
-        r.continuous = false;
-        r.interimResults = false;
+        r.continuous = true;
+        r.interimResults = true;
         r.lang = 'en-GB';
 
         r.onresult = (e) => {
-          const text = e.results[0][0].transcript;
-          if (text.trim()) {
-            addMessage('user', text);
-            processMessage(text);
-          } else {
-            setState('idle');
+          clearTimeout(silenceTimer);
+          let interim = '';
+          finalTranscript = '';
+          for (let i = 0; i < e.results.length; i++) {
+            if (e.results[i].isFinal) {
+              finalTranscript += e.results[i][0].transcript;
+            } else {
+              interim += e.results[i][0].transcript;
+            }
           }
+          // Show interim text in status
+          if (interim) {
+            statusEl.textContent = interim;
+            statusEl.className = 'status active';
+          }
+          // Reset silence timer — send after 2s of silence
+          silenceTimer = setTimeout(() => {
+            const text = (finalTranscript + interim).trim();
+            if (text) {
+              r.stop();
+              addMessage('user', text);
+              processMessage(text);
+            }
+          }, 2000);
         };
 
         r.onerror = (e) => {
+          clearTimeout(silenceTimer);
           if (e.error === 'no-speech') {
             setState('idle', 'no speech detected — tap again');
           } else if (e.error === 'not-allowed') {
@@ -314,7 +335,16 @@
         };
 
         r.onend = () => {
-          if (state === 'listening') setState('idle');
+          clearTimeout(silenceTimer);
+          if (state === 'listening') {
+            // If we have accumulated text, send it
+            if (finalTranscript.trim()) {
+              addMessage('user', finalTranscript.trim());
+              processMessage(finalTranscript.trim());
+            } else {
+              setState('idle');
+            }
+          }
         };
 
         return r;
@@ -389,6 +419,8 @@
         }
 
         setState('listening');
+        finalTranscript = '';
+        clearTimeout(silenceTimer);
         try {
           recognition.start();
         } catch (e) {
